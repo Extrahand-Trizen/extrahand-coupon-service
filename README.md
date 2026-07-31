@@ -25,6 +25,19 @@ Node: **>=20.19.0** (see `.nvmrc`)
 
 Set CapRover env vars from `captain-definition.envVars` (especially `MONGODB_URI`, `SERVICE_AUTH_TOKEN`, `PAYMENT_SERVICE_URL`).
 
+### Required wiring (or app shows “Network error” on Apply coupon)
+
+App → API Gateway → **Payment service** → **Coupon service**
+
+On CapRover **payment service**, set:
+
+```text
+COUPON_SERVICE_URL=http://srv-captain--extrahand-coupon-service:4015
+```
+
+(Use your real CapRover app name if different.)  
+Also ensure coupon-service is deployed and healthy at `/api/v1/health`, and `SERVICE_AUTH_TOKEN` matches payment/gateway.
+
 ## Seed FIRST100
 
 Runs automatically on startup (idempotent). Or:
