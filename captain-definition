@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 2,
+  "dockerfilePath": "./Dockerfile",
+  "buildArguments": {
+    "CACHE_BUST": "latest"
+  },
+  "expose": {
+    "api": {
+      "containerPort": 4015,
+      "httpPort": 80,
+      "httpsPort": 443
+    }
+  },
+  "healthcheck": {
+    "path": "/api/v1/health",
+    "port": 4015,
+    "interval": 30,
+    "timeout": 10,
+    "retries": 3,
+    "startPeriod": 40
+  },
+  "notify": {
+    "webhook": "",
+    "slack": "",
+    "discord": ""
+  },
+  "customDomain": "",
+  "forceSsl": true,
+  "appName": "extrahand-coupon-service",
+  "hasPersistentData": false,
+  "description": "ExtraHand Coupon Service — coupon CRUD, validation, and redemption",
+  "instanceCount": 1,
+  "tags": [
+    "nodejs",
+    "typescript",
+    "express",
+    "mongodb",
+    "api",
+    "extrahand",
+    "coupon-service"
+  ],
+  "envVars": {
+    "NODE_ENV": "production",
+    "PORT": "4015",
+    "LOG_LEVEL": "info",
+    "RATE_LIMIT_WINDOW_MS": "900000",
+    "RATE_LIMIT_MAX_REQUESTS": "1000",
+    "CORS_ORIGIN": "https://extrahand.in,https://www.extrahand.in,http://localhost:3000,http://localhost:5173",
+    "MONGODB_URI": "YOUR_MONGODB_URI_HERE",
+    "MONGODB_DB": "extrahand",
+    "SERVICE_AUTH_TOKEN": "YOUR_SERVICE_AUTH_TOKEN_HERE",
+    "PAYMENT_SERVICE_URL": "http://srv-captain--extrahand-payment-service:4009",
+    "PENDING_REDEMPTION_TTL_MINUTES": "30"
+  },
+  "volumes": [
+    {
+      "name": "app-logs",
+      "path": "/app/logs"
+    }
+  ],
+  "restart": {
+    "policy": "unless-stopped",
+    "maximumRetryCount": 10
+  },
+  "resources": {
+    "memory": "512Mi",
+    "cpu": "0.5"
+  },
+  "networking": {
+    "publishAllPorts": false,
+    "enableTcpProxy": false
+  }
+}
