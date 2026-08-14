@@ -7,6 +7,9 @@ export type ApplicabilityType = (typeof APPLICABILITY_TYPES)[number];
 export const FLOW_TYPES = ['BOOK_NOW', 'POST_COMPARE'] as const;
 export type FlowType = (typeof FLOW_TYPES)[number];
 
+export const COUPON_REDEMPTION_SCOPES = ['PER_USER', 'GLOBAL_SINGLE_USE'] as const;
+export type CouponRedemptionScope = (typeof COUPON_REDEMPTION_SCOPES)[number];
+
 export const REDEMPTION_STATUSES = ['PENDING', 'REDEEMED', 'CANCELLED', 'EXPIRED'] as const;
 export type RedemptionStatus = (typeof REDEMPTION_STATUSES)[number];
 

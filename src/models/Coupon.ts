@@ -2,6 +2,8 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 import {
   APPLICABILITY_TYPES,
   ApplicabilityType,
+  COUPON_REDEMPTION_SCOPES,
+  CouponRedemptionScope,
   DISCOUNT_TYPES,
   DiscountType,
   FLOW_TYPES,
@@ -17,6 +19,7 @@ export interface ICoupon extends Document {
   applicableTo: ApplicabilityType;
   serviceIds: string[];
   applicableFlows: FlowType[];
+  redemptionScope: CouponRedemptionScope;
   firstBookingOnly: boolean;
   usageLimitPerUser: number;
   startDate: Date;
@@ -69,6 +72,12 @@ const CouponSchema = new Schema<ICoupon>(
         validator: (v: string[]) => Array.isArray(v) && v.length > 0,
         message: 'At least one applicable flow is required',
       },
+    },
+    redemptionScope: {
+      type: String,
+      enum: COUPON_REDEMPTION_SCOPES,
+      required: true,
+      default: 'PER_USER',
     },
     firstBookingOnly: {
       type: Boolean,

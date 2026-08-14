@@ -1,11 +1,19 @@
 import mongoose, { Schema, Document, Model, Types } from 'mongoose';
-import { FLOW_TYPES, FlowType, REDEMPTION_STATUSES, RedemptionStatus } from '../constants/coupon';
+import {
+  COUPON_REDEMPTION_SCOPES,
+  CouponRedemptionScope,
+  FLOW_TYPES,
+  FlowType,
+  REDEMPTION_STATUSES,
+  RedemptionStatus,
+} from '../constants/coupon';
 
 export interface ICouponRedemption extends Document {
   couponId: Types.ObjectId;
   couponCode: string;
   userId: string;
   flowType: FlowType;
+  redemptionScope: CouponRedemptionScope;
   bookingOrderId: string | null;
   taskId: string | null;
   discountAmount: number;
@@ -39,6 +47,13 @@ const CouponRedemptionSchema = new Schema<ICouponRedemption>(
       type: String,
       enum: FLOW_TYPES,
       required: true,
+    },
+    redemptionScope: {
+      type: String,
+      enum: COUPON_REDEMPTION_SCOPES,
+      required: true,
+      default: 'PER_USER',
+      index: true,
     },
     bookingOrderId: {
       type: String,
@@ -76,6 +91,7 @@ const CouponRedemptionSchema = new Schema<ICouponRedemption>(
 );
 
 CouponRedemptionSchema.index({ couponId: 1, userId: 1, status: 1 });
+CouponRedemptionSchema.index({ couponId: 1, redemptionScope: 1, status: 1 });
 CouponRedemptionSchema.index({ userId: 1, status: 1 });
 CouponRedemptionSchema.index({ status: 1, expiresAt: 1 });
 
@@ -89,6 +105,18 @@ CouponRedemptionSchema.index(
     unique: true,
     partialFilterExpression: { status: { $in: ['PENDING', 'REDEEMED'] } },
     name: 'uniq_active_redemption_per_coupon_user',
+  }
+);
+
+CouponRedemptionSchema.index(
+  { couponId: 1, redemptionScope: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      redemptionScope: 'GLOBAL_SINGLE_USE',
+      status: { $in: ['PENDING', 'REDEEMED'] },
+    },
+    name: 'uniq_active_global_single_use_redemption_per_coupon',
   }
 );
 

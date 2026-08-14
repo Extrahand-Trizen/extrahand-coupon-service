@@ -8,8 +8,10 @@ import logger from '../config/logger';
 import {
   APPLICABILITY_TYPES,
   ApplicabilityType,
+  COUPON_REDEMPTION_SCOPES,
   COUPON_ERROR_CODES,
   COUPON_ERROR_MESSAGES,
+  CouponRedemptionScope,
   CouponErrorCode,
   DISCOUNT_TYPES,
   DiscountType,
@@ -29,6 +31,7 @@ export type ValidationSuccess = {
   valid: true;
   couponId: string;
   couponCode: string;
+  redemptionScope: CouponRedemptionScope;
   discountType: DiscountType;
   discountAmount: number;
   /** Full cart / order amount before coupon. */
@@ -175,6 +178,11 @@ function assertCreatePayload(payload: Record<string, unknown>) {
     throw new BadRequestError('applicableFlows is required', COUPON_ERROR_CODES.INVALID_REQUEST);
   }
 
+  const redemptionScope = String(payload.redemptionScope || 'PER_USER').toUpperCase() as CouponRedemptionScope;
+  if (!COUPON_REDEMPTION_SCOPES.includes(redemptionScope)) {
+    throw new BadRequestError('Invalid redemptionScope', COUPON_ERROR_CODES.INVALID_REQUEST);
+  }
+
   return {
     code,
     discountType,
@@ -183,8 +191,12 @@ function assertCreatePayload(payload: Record<string, unknown>) {
     applicableTo,
     serviceIds: applicableTo === 'ALL_SERVICES' ? [] : serviceIds,
     applicableFlows,
+    redemptionScope,
     firstBookingOnly: Boolean(payload.firstBookingOnly),
-    usageLimitPerUser: Math.max(1, Math.floor(Number(payload.usageLimitPerUser) || 1)),
+    usageLimitPerUser:
+      redemptionScope === 'GLOBAL_SINGLE_USE'
+        ? 1
+        : Math.max(1, Math.floor(Number(payload.usageLimitPerUser) || 1)),
     startDate: payload.startDate ? new Date(String(payload.startDate)) : new Date(),
     expiryDate: payload.expiryDate ? new Date(String(payload.expiryDate)) : null,
     isActive: payload.isActive === undefined ? true : Boolean(payload.isActive),
@@ -233,6 +245,7 @@ export class CouponService {
       'applicableTo',
       'serviceIds',
       'applicableFlows',
+      'redemptionScope',
       'firstBookingOnly',
       'usageLimitPerUser',
       'startDate',
@@ -264,6 +277,13 @@ export class CouponService {
         'serviceIds required when applicableTo is SELECTED_SERVICES',
         COUPON_ERROR_CODES.INVALID_REQUEST
       );
+    }
+
+    if (!coupon.redemptionScope) {
+      coupon.redemptionScope = 'PER_USER';
+    }
+    if (coupon.redemptionScope === 'GLOBAL_SINGLE_USE') {
+      coupon.usageLimitPerUser = 1;
     }
 
     await coupon.save();
@@ -311,6 +331,7 @@ export class CouponService {
     const coupon = await Coupon.findOne({ code });
     if (!coupon) return fail(COUPON_ERROR_CODES.COUPON_NOT_FOUND);
     if (!coupon.isActive) return fail(COUPON_ERROR_CODES.COUPON_INACTIVE);
+    const redemptionScope = coupon.redemptionScope || 'PER_USER';
 
     const now = new Date();
     if (coupon.startDate && coupon.startDate > now) {
@@ -349,18 +370,41 @@ export class CouponService {
       userId,
       status: 'REDEEMED',
     });
-    if (redeemedCount >= coupon.usageLimitPerUser) {
+
+    if (redemptionScope === 'GLOBAL_SINGLE_USE') {
+      const globallyUsed = await CouponRedemption.exists({
+        couponId: coupon._id,
+        redemptionScope: 'GLOBAL_SINGLE_USE',
+        status: 'REDEEMED',
+      });
+      if (globallyUsed) {
+        return fail(COUPON_ERROR_CODES.COUPON_ALREADY_USED, 'This coupon has already been claimed.');
+      }
+    } else if (redeemedCount >= coupon.usageLimitPerUser) {
       return fail(COUPON_ERROR_CODES.COUPON_ALREADY_USED);
     }
 
     if (!params.skipActiveRedemptionCheck) {
-      const active = await CouponRedemption.findOne({
-        couponId: coupon._id,
-        userId,
-        status: 'PENDING',
-      }).lean();
+      const activeQuery =
+        redemptionScope === 'GLOBAL_SINGLE_USE'
+          ? {
+              couponId: coupon._id,
+              redemptionScope: 'GLOBAL_SINGLE_USE' as CouponRedemptionScope,
+              status: 'PENDING' as const,
+            }
+          : {
+              couponId: coupon._id,
+              userId,
+              status: 'PENDING' as const,
+            };
+      const active = await CouponRedemption.findOne(activeQuery).lean();
       if (active) {
-        return fail(COUPON_ERROR_CODES.COUPON_REDEMPTION_CONFLICT);
+        return fail(
+          COUPON_ERROR_CODES.COUPON_REDEMPTION_CONFLICT,
+          redemptionScope === 'GLOBAL_SINGLE_USE'
+            ? 'This coupon is currently being claimed on another payment. Please try again shortly.'
+            : undefined
+        );
       }
     }
 
@@ -387,6 +431,7 @@ export class CouponService {
       valid: true,
       couponId: String(coupon._id),
       couponCode: coupon.code,
+      redemptionScope,
       discountType: coupon.discountType,
       discountAmount,
       originalAmount: amount,
@@ -442,6 +487,7 @@ export class CouponService {
     const coupons = await Coupon.find({
       isActive: true,
       applicableFlows: flowType,
+      redemptionScope: { $ne: 'GLOBAL_SINGLE_USE' },
       startDate: { $lte: now },
       $or: [{ expiryDate: null }, { expiryDate: { $gte: now } }],
     })
@@ -562,6 +608,7 @@ export class CouponService {
         couponCode: validation.couponCode,
         userId: String(params.userId).trim(),
         flowType: String(params.flowType).toUpperCase(),
+        redemptionScope: validation.redemptionScope,
         bookingOrderId: params.bookingOrderId || null,
         taskId: params.taskId || null,
         discountAmount: validation.discountAmount,
@@ -656,6 +703,7 @@ export class CouponService {
       applicableTo: 'ALL_SERVICES',
       serviceIds: [],
       applicableFlows: ['BOOK_NOW', 'POST_COMPARE'],
+      redemptionScope: 'PER_USER',
       firstBookingOnly: true,
       usageLimitPerUser: 1,
       startDate: new Date(),
