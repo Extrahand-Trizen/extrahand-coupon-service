@@ -18,6 +18,7 @@ router.post('/redemptions/expire-pending', asyncHandler(CouponController.expireP
 
 // Admin management
 router.post('/admin/coupons', asyncHandler(CouponController.create));
+router.post('/admin/coupons/bulk', asyncHandler(CouponController.bulkCreate));
 router.get('/admin/coupons', asyncHandler(CouponController.list));
 router.get('/admin/coupons/:id', asyncHandler(CouponController.getById));
 router.patch('/admin/coupons/:id', asyncHandler(CouponController.update));

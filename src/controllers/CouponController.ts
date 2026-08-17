@@ -145,6 +145,11 @@ export class CouponController {
     res.status(201).json({ success: true, coupon });
   }
 
+  static async bulkCreate(req: Request, res: Response): Promise<void> {
+    const result = await CouponService.bulkCreateCoupons(req.body || {});
+    res.status(201).json({ success: true, ...result });
+  }
+
   static async list(req: Request, res: Response): Promise<void> {
     const isActive =
       req.query.isActive === undefined

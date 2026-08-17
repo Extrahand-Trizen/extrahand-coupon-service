@@ -142,6 +142,14 @@ function resolveDiscountBase(params: {
 function assertCreatePayload(payload: Record<string, unknown>) {
   const code = normalizeCouponCode(String(payload.code || ''));
   if (!code) throw new BadRequestError('Coupon code is required', COUPON_ERROR_CODES.INVALID_REQUEST);
+  return assertCreatePayloadWithCode(payload, code);
+}
+
+function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: string) {
+  const normalizedCode = normalizeCouponCode(code);
+  if (!normalizedCode) {
+    throw new BadRequestError('Coupon code is required', COUPON_ERROR_CODES.INVALID_REQUEST);
+  }
 
   const discountType = String(payload.discountType || '').toUpperCase() as DiscountType;
   if (!DISCOUNT_TYPES.includes(discountType)) {
@@ -184,7 +192,7 @@ function assertCreatePayload(payload: Record<string, unknown>) {
   }
 
   return {
-    code,
+    code: normalizedCode,
     discountType,
     discountValue,
     minOrderAmount: Math.max(0, Number(payload.minOrderAmount) || 0),
@@ -223,6 +231,46 @@ export class CouponService {
       query.code = { $regex: normalizeCouponCode(filters.search), $options: 'i' };
     }
     return Coupon.find(query).sort({ createdAt: -1 });
+  }
+
+  static async bulkCreateCoupons(
+    payload: Record<string, unknown>
+  ): Promise<{
+    createdCount: number;
+    skippedCount: number;
+    createdCodes: string[];
+    skippedCodes: string[];
+  }> {
+    const rawCodes = Array.isArray(payload.codes) ? payload.codes : [];
+    const normalizedCodes = [...new Set(
+      rawCodes.map((code) => normalizeCouponCode(String(code || ''))).filter(Boolean)
+    )];
+
+    if (normalizedCodes.length === 0) {
+      throw new BadRequestError('At least one coupon code is required', COUPON_ERROR_CODES.INVALID_REQUEST);
+    }
+
+    const basePayload = {
+      ...payload,
+      redemptionScope: 'GLOBAL_SINGLE_USE',
+      usageLimitPerUser: 1,
+    };
+
+    const drafts = normalizedCodes.map((code) => assertCreatePayloadWithCode(basePayload, code));
+    const existing = await Coupon.find({ code: { $in: normalizedCodes } }, { code: 1 }).lean();
+    const existingCodes = new Set(existing.map((coupon) => normalizeCouponCode(String(coupon.code || ''))));
+
+    const toCreate = drafts.filter((draft) => !existingCodes.has(draft.code));
+    if (toCreate.length > 0) {
+      await Coupon.insertMany(toCreate, { ordered: false });
+    }
+
+    return {
+      createdCount: toCreate.length,
+      skippedCount: normalizedCodes.length - toCreate.length,
+      createdCodes: toCreate.map((draft) => draft.code),
+      skippedCodes: normalizedCodes.filter((code) => existingCodes.has(code)),
+    };
   }
 
   static async getCouponById(id: string): Promise<ICoupon> {
