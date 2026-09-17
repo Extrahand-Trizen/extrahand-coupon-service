@@ -96,14 +96,14 @@ CouponRedemptionSchema.index({ userId: 1, status: 1 });
 CouponRedemptionSchema.index({ status: 1, expiresAt: 1 });
 
 /**
- * At most one active (PENDING or REDEEMED) redemption per coupon+user.
- * CANCELLED / EXPIRED do not block retries.
+ * At most one in-flight (PENDING) redemption per coupon+user.
+ * CANCELLED / EXPIRED do not block retries; completed REDEEMED are capped by usageLimitPerUser.
  */
 CouponRedemptionSchema.index(
   { couponId: 1, userId: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: { $in: ['PENDING', 'REDEEMED'] } },
+    partialFilterExpression: { status: 'PENDING' },
     name: 'uniq_active_redemption_per_coupon_user',
   }
 );

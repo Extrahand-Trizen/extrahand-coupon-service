@@ -666,6 +666,15 @@ export class CouponService {
           validation.eligibleAmount < validation.originalAmount - 0.001
             ? ` on selected services`
             : '';
+        const is100Percent =
+          (validation.discountType === 'PERCENTAGE' && Number(coupon.discountValue) === 100) ||
+          validation.amountAfterCoupon === 0 ||
+          validation.discountAmount >= validation.originalAmount;
+
+        const offLabel = is100Percent
+          ? `100% off${onServices}`
+          : `₹${validation.discountAmount.toLocaleString('en-IN')} off${onServices}`;
+
         results.push({
           couponId: validation.couponId,
           couponCode: validation.couponCode,
@@ -673,7 +682,7 @@ export class CouponService {
           discountValue: Number(coupon.discountValue) || 0,
           minOrderAmount: Number(coupon.minOrderAmount) || 0,
           status: 'AVAILABLE',
-          message: `₹${validation.discountAmount.toLocaleString('en-IN')} off${onServices}`,
+          message: offLabel,
           discountAmount: validation.discountAmount,
           originalAmount: validation.originalAmount,
           amountAfterCoupon: validation.amountAfterCoupon,
