@@ -20,6 +20,8 @@ export class CouponController {
       amount: Number(req.body?.amount),
       serviceIds: Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : [],
       lineItems: Array.isArray(req.body?.lineItems) ? req.body.lineItems : [],
+      city: req.body?.city ? String(req.body.city).trim() : undefined,
+      pinCode: req.body?.pinCode ? String(req.body.pinCode).trim() : undefined,
     });
 
     if (!result.valid) {
@@ -59,6 +61,8 @@ export class CouponController {
       amount: Number(req.body?.amount),
       serviceIds: Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : [],
       lineItems: Array.isArray(req.body?.lineItems) ? req.body.lineItems : [],
+      city: req.body?.city ? String(req.body.city).trim() : undefined,
+      pinCode: req.body?.pinCode ? String(req.body.pinCode).trim() : undefined,
     });
 
     res.json({
@@ -80,6 +84,8 @@ export class CouponController {
       amount: Number(req.body?.amount),
       serviceIds: Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : [],
       lineItems: Array.isArray(req.body?.lineItems) ? req.body.lineItems : [],
+      city: req.body?.city ? String(req.body.city).trim() : undefined,
+      pinCode: req.body?.pinCode ? String(req.body.pinCode).trim() : undefined,
       bookingOrderId: req.body?.bookingOrderId || null,
       taskId: req.body?.taskId || null,
     });

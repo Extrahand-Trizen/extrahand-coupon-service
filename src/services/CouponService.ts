@@ -17,6 +17,8 @@ import {
   DiscountType,
   FLOW_TYPES,
   FlowType,
+  LOCATION_APPLICABILITY_TYPES,
+  LocationApplicabilityType,
   normalizeCouponCode,
   round2,
 } from '../constants/coupon';
@@ -179,6 +181,25 @@ function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: str
     );
   }
 
+  const applicableLocations = String(payload.applicableLocations || 'ALL_LOCATIONS').toUpperCase() as LocationApplicabilityType;
+  if (!LOCATION_APPLICABILITY_TYPES.includes(applicableLocations)) {
+    throw new BadRequestError('Invalid applicableLocations', COUPON_ERROR_CODES.INVALID_REQUEST);
+  }
+
+  const cities = Array.isArray(payload.cities)
+    ? payload.cities.map((c) => String(c).trim().toUpperCase()).filter(Boolean)
+    : [];
+  const pincodes = Array.isArray(payload.pincodes)
+    ? payload.pincodes.map((p) => String(p).trim()).filter(Boolean)
+    : [];
+
+  if (applicableLocations === 'SELECTED_LOCATIONS' && cities.length === 0 && pincodes.length === 0) {
+    throw new BadRequestError(
+      'At least one city or pincode is required when applicableLocations is SELECTED_LOCATIONS',
+      COUPON_ERROR_CODES.INVALID_REQUEST
+    );
+  }
+
   const applicableFlows = (Array.isArray(payload.applicableFlows) ? payload.applicableFlows : [])
     .map((f) => String(f).toUpperCase())
     .filter((f): f is FlowType => (FLOW_TYPES as readonly string[]).includes(f));
@@ -191,6 +212,12 @@ function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: str
     throw new BadRequestError('Invalid redemptionScope', COUPON_ERROR_CODES.INVALID_REQUEST);
   }
 
+  const rawOverallUsageLimit = payload.overallUsageLimit;
+  const overallUsageLimit =
+    rawOverallUsageLimit === undefined || rawOverallUsageLimit === null || rawOverallUsageLimit === ''
+      ? null
+      : Math.max(1, Math.floor(Number(rawOverallUsageLimit) || 1));
+
   return {
     code: normalizedCode,
     discountType,
@@ -198,6 +225,9 @@ function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: str
     minOrderAmount: Math.max(0, Number(payload.minOrderAmount) || 0),
     applicableTo,
     serviceIds: applicableTo === 'ALL_SERVICES' ? [] : serviceIds,
+    applicableLocations,
+    cities: applicableLocations === 'ALL_LOCATIONS' ? [] : cities,
+    pincodes: applicableLocations === 'ALL_LOCATIONS' ? [] : pincodes,
     applicableFlows,
     redemptionScope,
     firstBookingOnly: Boolean(payload.firstBookingOnly),
@@ -205,6 +235,7 @@ function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: str
       redemptionScope === 'GLOBAL_SINGLE_USE'
         ? 1
         : Math.max(1, Math.floor(Number(payload.usageLimitPerUser) || 1)),
+    overallUsageLimit,
     startDate: payload.startDate ? new Date(String(payload.startDate)) : new Date(),
     expiryDate: payload.expiryDate ? new Date(String(payload.expiryDate)) : null,
     isActive: payload.isActive === undefined ? true : Boolean(payload.isActive),
@@ -292,10 +323,14 @@ export class CouponService {
       'minOrderAmount',
       'applicableTo',
       'serviceIds',
+      'applicableLocations',
+      'cities',
+      'pincodes',
       'applicableFlows',
       'redemptionScope',
       'firstBookingOnly',
       'usageLimitPerUser',
+      'overallUsageLimit',
       'startDate',
       'expiryDate',
       'isActive',
@@ -327,11 +362,30 @@ export class CouponService {
       );
     }
 
+    if (coupon.applicableLocations === 'ALL_LOCATIONS') {
+      coupon.cities = [];
+      coupon.pincodes = [];
+    } else if (coupon.applicableLocations === 'SELECTED_LOCATIONS') {
+      const cities = (coupon.cities || []).map((c) => String(c).trim().toUpperCase()).filter(Boolean);
+      const pincodes = (coupon.pincodes || []).map((p) => String(p).trim()).filter(Boolean);
+      if (cities.length === 0 && pincodes.length === 0) {
+        throw new BadRequestError(
+          'At least one city or pincode is required when applicableLocations is SELECTED_LOCATIONS',
+          COUPON_ERROR_CODES.INVALID_REQUEST
+        );
+      }
+      coupon.cities = cities;
+      coupon.pincodes = pincodes;
+    }
+
     if (!coupon.redemptionScope) {
       coupon.redemptionScope = 'PER_USER';
     }
     if (coupon.redemptionScope === 'GLOBAL_SINGLE_USE') {
       coupon.usageLimitPerUser = 1;
+    }
+    if (coupon.overallUsageLimit !== undefined && coupon.overallUsageLimit !== null && coupon.overallUsageLimit < 1) {
+      coupon.overallUsageLimit = null;
     }
 
     await coupon.save();
@@ -358,6 +412,8 @@ export class CouponService {
     serviceIds?: string[];
     /** Optional per-service amounts so SELECTED_SERVICES coupons discount only matching lines. */
     lineItems?: CouponLineItemInput[];
+    city?: string;
+    pinCode?: string;
     skipActiveRedemptionCheck?: boolean;
   }): Promise<ValidationResult> {
     const code = normalizeCouponCode(params.couponCode);
@@ -392,6 +448,26 @@ export class CouponService {
       return fail(COUPON_ERROR_CODES.FLOW_NOT_ELIGIBLE);
     }
 
+    if (coupon.applicableLocations === 'SELECTED_LOCATIONS') {
+      const userCity = String(params.city || '').trim().toUpperCase();
+      const userPin = String(params.pinCode || '').trim();
+
+      const couponCities = (coupon.cities || []).map((c) => c.trim().toUpperCase()).filter(Boolean);
+      const couponPins = (coupon.pincodes || []).map((p) => p.trim()).filter(Boolean);
+
+      let locationMatches = false;
+      if (couponCities.length > 0 && userCity && couponCities.includes(userCity)) {
+        locationMatches = true;
+      }
+      if (couponPins.length > 0 && userPin && couponPins.includes(userPin)) {
+        locationMatches = true;
+      }
+
+      if (!locationMatches) {
+        return fail(COUPON_ERROR_CODES.LOCATION_NOT_ELIGIBLE);
+      }
+    }
+
     const { discountBase, eligibleServiceIds, eligible } = resolveDiscountBase({
       coupon,
       orderAmount: amount,
@@ -418,6 +494,17 @@ export class CouponService {
       userId,
       status: 'REDEEMED',
     });
+    const totalRedeemedCount = await CouponRedemption.countDocuments({
+      couponId: coupon._id,
+      status: 'REDEEMED',
+    });
+
+    if (coupon.overallUsageLimit && totalRedeemedCount >= coupon.overallUsageLimit) {
+      return fail(
+        COUPON_ERROR_CODES.COUPON_USAGE_LIMIT_REACHED,
+        `This coupon has reached its overall usage limit of ${coupon.overallUsageLimit}.`
+      );
+    }
 
     if (redemptionScope === 'GLOBAL_SINGLE_USE') {
       const globallyUsed = await CouponRedemption.exists({
@@ -498,6 +585,8 @@ export class CouponService {
     amount: number;
     serviceIds?: string[];
     lineItems?: CouponLineItemInput[];
+    city?: string;
+    pinCode?: string;
   }): Promise<
     Array<{
       couponId: string;
@@ -566,6 +655,8 @@ export class CouponService {
         amount,
         serviceIds,
         lineItems,
+        city: params.city,
+        pinCode: params.pinCode,
         skipActiveRedemptionCheck: true,
       });
 
@@ -589,6 +680,11 @@ export class CouponService {
           eligibleAmount: validation.eligibleAmount,
           eligibleServiceIds: validation.eligibleServiceIds,
         });
+        continue;
+      }
+
+      // Do not show coupons in the list that belong to other locations
+      if (validation.code === COUPON_ERROR_CODES.LOCATION_NOT_ELIGIBLE) {
         continue;
       }
 
@@ -628,6 +724,8 @@ export class CouponService {
     amount: number;
     serviceIds?: string[];
     lineItems?: CouponLineItemInput[];
+    city?: string;
+    pinCode?: string;
     bookingOrderId?: string | null;
     taskId?: string | null;
   }): Promise<{

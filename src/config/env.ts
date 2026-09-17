@@ -15,6 +15,8 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.string().transform(Number).default('900000'),
   RATE_LIMIT_MAX_REQUESTS: z.string().transform(Number).default('1000'),
+  LOCAL_ADMIN_USERNAME: z.string().default('admin'),
+  LOCAL_ADMIN_PASSWORD: z.string().default('admin123'),
 });
 
 export function validateEnv() {

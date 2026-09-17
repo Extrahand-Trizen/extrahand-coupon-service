@@ -8,6 +8,8 @@ import {
   DiscountType,
   FLOW_TYPES,
   FlowType,
+  LOCATION_APPLICABILITY_TYPES,
+  LocationApplicabilityType,
   normalizeCouponCode,
 } from '../constants/coupon';
 
@@ -18,10 +20,14 @@ export interface ICoupon extends Document {
   minOrderAmount: number;
   applicableTo: ApplicabilityType;
   serviceIds: string[];
+  applicableLocations: LocationApplicabilityType;
+  cities: string[];
+  pincodes: string[];
   applicableFlows: FlowType[];
   redemptionScope: CouponRedemptionScope;
   firstBookingOnly: boolean;
   usageLimitPerUser: number;
+  overallUsageLimit: number | null;
   startDate: Date;
   expiryDate: Date | null;
   isActive: boolean;
@@ -65,6 +71,20 @@ const CouponSchema = new Schema<ICoupon>(
       type: [String],
       default: [],
     },
+    applicableLocations: {
+      type: String,
+      enum: LOCATION_APPLICABILITY_TYPES,
+      required: true,
+      default: 'ALL_LOCATIONS',
+    },
+    cities: {
+      type: [String],
+      default: [],
+    },
+    pincodes: {
+      type: [String],
+      default: [],
+    },
     applicableFlows: {
       type: [{ type: String, enum: FLOW_TYPES }],
       required: true,
@@ -88,6 +108,15 @@ const CouponSchema = new Schema<ICoupon>(
       required: true,
       min: 1,
       default: 1,
+    },
+    overallUsageLimit: {
+      type: Number,
+      min: 1,
+      default: null,
+      validate: {
+        validator: (v: number | null) => v === null || v >= 1,
+        message: 'overallUsageLimit must be at least 1 when set',
+      },
     },
     startDate: {
       type: Date,
@@ -113,6 +142,17 @@ CouponSchema.pre('validate', function (next) {
   }
   if (this.applicableTo === 'ALL_SERVICES') {
     this.serviceIds = [];
+  }
+  if (this.applicableLocations === 'ALL_LOCATIONS') {
+    this.cities = [];
+    this.pincodes = [];
+  } else {
+    if (Array.isArray(this.cities)) {
+      this.cities = this.cities.map((c) => String(c).trim().toUpperCase()).filter(Boolean);
+    }
+    if (Array.isArray(this.pincodes)) {
+      this.pincodes = this.pincodes.map((p) => String(p).trim()).filter(Boolean);
+    }
   }
   next();
 });
