@@ -49,6 +49,8 @@ export type ValidationResult = ValidationSuccess | ValidationFailure;
 export type CouponLineItemInput = {
   serviceId: string;
   amount: number;
+  skuSlug?: string;
+  categorySlug?: string;
 };
 
 function fail(code: CouponErrorCode, messageOverride?: string): ValidationFailure {
@@ -76,7 +78,9 @@ function normalizeLineItems(raw: unknown): CouponLineItemInput[] {
     .map((row) => {
       const serviceId = String((row as any)?.serviceId || '').trim();
       const amount = round2(Number((row as any)?.amount) || 0);
-      return { serviceId, amount };
+      const skuSlug = String((row as any)?.skuSlug || '').trim() || undefined;
+      const categorySlug = String((row as any)?.categorySlug || '').trim() || undefined;
+      return { serviceId, amount, skuSlug, categorySlug };
     })
     .filter((row) => row.serviceId && row.amount > 0);
 }
@@ -84,7 +88,7 @@ function normalizeLineItems(raw: unknown): CouponLineItemInput[] {
 /**
  * Resolve the amount a coupon may discount.
  * Prefer per-line service (pre-GST) amounts when provided:
- * - SELECTED_SERVICES → matching lines only
+ * - SELECTED_SERVICES → matching lines only (matches on serviceId, skuSlug, or categorySlug)
  * - ALL_SERVICES → all line items
  * GST is calculated on the discounted service subtotal (caller recalculates per category).
  */
@@ -103,8 +107,39 @@ function resolveDiscountBase(params: {
   if (lineItems.length > 0) {
     if (coupon.applicableTo === 'SELECTED_SERVICES') {
       const allowed = new Set((coupon.serviceIds || []).map((s) => s.trim().toLowerCase()));
-      const matching = lineItems.filter((l) => allowed.has(l.serviceId.toLowerCase()));
-      const eligibleServiceIds = [...new Set(matching.map((l) => l.serviceId))];
+      const matching = lineItems.filter((l) => {
+        const sId = l.serviceId?.toLowerCase();
+        const sku = l.skuSlug?.toLowerCase();
+        const cat = l.categorySlug?.toLowerCase();
+        if ((sId && allowed.has(sId)) || (sku && allowed.has(sku)) || (cat && allowed.has(cat))) {
+          return true;
+        }
+        // If the coupon targets parent 'hourly-helper', any 'hourly-...' duration sku matches as well
+        if (allowed.has('hourly-helper') && (sId?.startsWith('hourly-') || sku?.startsWith('hourly-'))) {
+          return true;
+        }
+        return false;
+      });
+      const eligibleServiceIds = [
+        ...new Set(
+          matching.flatMap((l) => {
+            const sId = l.serviceId?.toLowerCase();
+            const sku = l.skuSlug?.toLowerCase();
+            const cat = l.categorySlug?.toLowerCase();
+            const matched: string[] = [];
+            if (sku && allowed.has(sku)) matched.push(l.skuSlug!);
+            else if (sId && allowed.has(sId)) matched.push(l.serviceId);
+            else if (cat && allowed.has(cat)) matched.push(l.categorySlug!);
+            else if (
+              allowed.has('hourly-helper') &&
+              (sId?.startsWith('hourly-') || sku?.startsWith('hourly-'))
+            ) {
+              matched.push(l.skuSlug || l.serviceId || 'hourly-helper');
+            }
+            return matched.length > 0 ? matched : [l.skuSlug || l.serviceId];
+          })
+        ),
+      ];
       const discountBase = round2(matching.reduce((sum, l) => sum + l.amount, 0));
       return {
         discountBase,
@@ -113,7 +148,13 @@ function resolveDiscountBase(params: {
       };
     }
 
-    const eligibleServiceIds = [...new Set(lineItems.map((l) => l.serviceId))];
+    const eligibleServiceIds = [
+      ...new Set(
+        lineItems
+          .map((l) => l.skuSlug || l.serviceId || l.categorySlug)
+          .filter(Boolean) as string[]
+      ),
+    ];
     const discountBase = round2(lineItems.reduce((sum, l) => sum + l.amount, 0));
     return {
       discountBase,
@@ -124,7 +165,12 @@ function resolveDiscountBase(params: {
 
   if (coupon.applicableTo === 'SELECTED_SERVICES') {
     const allowed = new Set((coupon.serviceIds || []).map((s) => s.trim().toLowerCase()));
-    const eligibleServiceIds = serviceIds.filter((id) => allowed.has(id.toLowerCase()));
+    const eligibleServiceIds = serviceIds.filter((id) => {
+      const lower = id.toLowerCase();
+      if (allowed.has(lower)) return true;
+      if (allowed.has('hourly-helper') && lower.startsWith('hourly-')) return true;
+      return false;
+    });
     return {
       discountBase: orderAmount,
       eligibleServiceIds,
@@ -664,7 +710,7 @@ export class CouponService {
         const onServices =
           validation.eligibleServiceIds.length > 0 &&
           validation.eligibleAmount < validation.originalAmount - 0.001
-            ? ` on selected services`
+            ? `selected services`
             : '';
         const is100Percent =
           (validation.discountType === 'PERCENTAGE' && Number(coupon.discountValue) === 100) ||
@@ -672,8 +718,10 @@ export class CouponService {
           validation.discountAmount >= validation.originalAmount;
 
         const offLabel = is100Percent
-          ? `100% off${onServices}`
-          : `₹${validation.discountAmount.toLocaleString('en-IN')} off${onServices}`;
+          ? (onServices ? `100% OFF – ${onServices}` : '100% OFF')
+          : (onServices
+              ? `₹${validation.discountAmount.toLocaleString('en-IN')} OFF – ${onServices}`
+              : `₹${validation.discountAmount.toLocaleString('en-IN')} OFF`);
 
         results.push({
           couponId: validation.couponId,
