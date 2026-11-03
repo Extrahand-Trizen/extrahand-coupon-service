@@ -11,6 +11,11 @@ function resolveUserId(req: Request): string {
 }
 
 export class CouponController {
+  static async listHomeOffers(_req: Request, res: Response): Promise<void> {
+    const offers = await CouponService.listHomeOffers();
+    res.json({ success: true, data: offers });
+  }
+
   static async validate(req: Request, res: Response): Promise<void> {
     const userId = resolveUserId(req);
     const result = await CouponService.validateCoupon({
@@ -41,11 +46,13 @@ export class CouponController {
       couponId: result.couponId,
       couponCode: result.couponCode,
       discountType: result.discountType,
+      discountValue: result.discountValue,
       discountAmount: result.discountAmount,
       originalAmount: result.originalAmount,
       amountAfterCoupon: result.amountAfterCoupon,
       eligibleAmount: result.eligibleAmount,
       eligibleServiceIds: result.eligibleServiceIds,
+      eligibleLineKeys: result.eligibleLineKeys,
     });
   }
 
@@ -113,6 +120,7 @@ export class CouponController {
         originalAmount: result.validation.originalAmount,
         eligibleAmount: result.validation.eligibleAmount,
         eligibleServiceIds: result.validation.eligibleServiceIds,
+        eligibleLineKeys: result.validation.eligibleLineKeys,
         status: result.redemption.status,
         expiresAt: result.redemption.expiresAt,
       },

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import couponRoutes from './coupons';
 import adminRoutes from './admin';
+import catalogAdminRoutes from './catalogAdmin';
 import { isDatabaseConnected } from '../config/database';
 import { validateEnv } from '../config/env';
 
@@ -20,5 +21,6 @@ router.get('/health', (_req, res) => {
 
 router.use('/admin', adminRoutes);
 router.use('/coupons', couponRoutes);
+router.use('/catalog', catalogAdminRoutes);
 
 export default router;

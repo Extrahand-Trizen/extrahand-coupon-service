@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'crypto';
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { asyncHandler } from '../middleware/errorHandler';
+import { issueAdminSessionToken } from '../middleware/adminSession';
 import { validateEnv } from '../config/env';
 import logger from '../config/logger';
 
@@ -56,13 +57,15 @@ export class AdminAuthController {
       );
 
       if (response.status === 200 && response.data?.success && response.data?.user?.username) {
+        const adminUser = {
+          username: String(response.data.user.username),
+          email: response.data.user.email ?? null,
+          role: response.data.user.role ?? 'ADMIN',
+        };
         return res.status(200).json({
           success: true,
-          user: {
-            username: String(response.data.user.username),
-            email: response.data.user.email ?? null,
-            role: response.data.user.role ?? 'ADMIN',
-          },
+          user: adminUser,
+          ...issueAdminSessionToken(adminUser),
         });
       }
 
@@ -80,6 +83,7 @@ export class AdminAuthController {
         return res.status(200).json({
           success: true,
           user: local,
+          ...issueAdminSessionToken(local),
         });
       }
 

@@ -35,6 +35,7 @@ export type ValidationSuccess = {
   couponCode: string;
   redemptionScope: CouponRedemptionScope;
   discountType: DiscountType;
+  discountValue: number;
   discountAmount: number;
   /** Full cart / order amount before coupon. */
   originalAmount: number;
@@ -42,15 +43,24 @@ export type ValidationSuccess = {
   /** Amount the discount was calculated on (eligible services only when scoped). */
   eligibleAmount: number;
   eligibleServiceIds: string[];
+  eligibleLineKeys: string[];
 };
 
 export type ValidationResult = ValidationSuccess | ValidationFailure;
+
+type CouponValidationContext = {
+  coupon: ICoupon;
+  redeemedCount: number;
+  totalRedeemedCount: number;
+  deferFirstBookingCheck?: boolean;
+};
 
 export type CouponLineItemInput = {
   serviceId: string;
   amount: number;
   skuSlug?: string;
   categorySlug?: string;
+  lineKey?: string;
 };
 
 function fail(code: CouponErrorCode, messageOverride?: string): ValidationFailure {
@@ -61,7 +71,10 @@ function fail(code: CouponErrorCode, messageOverride?: string): ValidationFailur
   };
 }
 
-function calculateDiscount(coupon: ICoupon, amount: number): number {
+export function calculateDiscount(
+  coupon: Pick<ICoupon, 'discountType' | 'discountValue'>,
+  amount: number,
+): number {
   let discount = 0;
   if (coupon.discountType === 'FIXED') {
     discount = Number(coupon.discountValue) || 0;
@@ -80,7 +93,10 @@ function normalizeLineItems(raw: unknown): CouponLineItemInput[] {
       const amount = round2(Number((row as any)?.amount) || 0);
       const skuSlug = String((row as any)?.skuSlug || '').trim() || undefined;
       const categorySlug = String((row as any)?.categorySlug || '').trim() || undefined;
-      return { serviceId, amount, skuSlug, categorySlug };
+      const lineKey =
+        String((row as any)?.lineKey || '').trim() ||
+        (categorySlug && skuSlug ? `${categorySlug}::${skuSlug}` : serviceId);
+      return { serviceId, amount, skuSlug, categorySlug, lineKey };
     })
     .filter((row) => row.serviceId && row.amount > 0);
 }
@@ -88,18 +104,20 @@ function normalizeLineItems(raw: unknown): CouponLineItemInput[] {
 /**
  * Resolve the amount a coupon may discount.
  * Prefer per-line service (pre-GST) amounts when provided:
- * - SELECTED_SERVICES → matching lines only (matches on serviceId, skuSlug, or categorySlug)
- * - ALL_SERVICES → all line items
+ * - SELECTED_SERVICES → highest-value matching line (matches on serviceId, skuSlug, or categorySlug)
+ * - ALL_SERVICES → the highest-value line item
  * GST is calculated on the discounted service subtotal (caller recalculates per category).
  */
-function resolveDiscountBase(params: {
-  coupon: ICoupon;
+export function resolveDiscountBase(params: {
+  coupon: Pick<ICoupon, 'applicableTo' | 'serviceIds'>;
   orderAmount: number;
   serviceIds: string[];
   lineItems: CouponLineItemInput[];
 }): {
   discountBase: number;
   eligibleServiceIds: string[];
+  eligibleLineKeys: string[];
+  minimumOrderBase: number;
   eligible: boolean;
 } {
   const { coupon, orderAmount, serviceIds, lineItems } = params;
@@ -120,45 +138,36 @@ function resolveDiscountBase(params: {
         }
         return false;
       });
-      const eligibleServiceIds = [
-        ...new Set(
-          matching.flatMap((l) => {
-            const sId = l.serviceId?.toLowerCase();
-            const sku = l.skuSlug?.toLowerCase();
-            const cat = l.categorySlug?.toLowerCase();
-            const matched: string[] = [];
-            if (sku && allowed.has(sku)) matched.push(l.skuSlug!);
-            else if (sId && allowed.has(sId)) matched.push(l.serviceId);
-            else if (cat && allowed.has(cat)) matched.push(l.categorySlug!);
-            else if (
-              allowed.has('hourly-helper') &&
-              (sId?.startsWith('hourly-') || sku?.startsWith('hourly-'))
-            ) {
-              matched.push(l.skuSlug || l.serviceId || 'hourly-helper');
-            }
-            return matched.length > 0 ? matched : [l.skuSlug || l.serviceId];
-          })
-        ),
-      ];
-      const discountBase = round2(matching.reduce((sum, l) => sum + l.amount, 0));
+      const highestValueLine = matching.reduce<CouponLineItemInput | null>(
+        (highest, line) => (!highest || line.amount > highest.amount ? line : highest),
+        null,
+      );
+      const discountBase = round2(highestValueLine?.amount || 0);
       return {
         discountBase,
-        eligibleServiceIds,
+        eligibleServiceIds: highestValueLine
+          ? [highestValueLine.skuSlug || highestValueLine.serviceId || highestValueLine.categorySlug || '']
+              .filter(Boolean)
+          : [],
+        eligibleLineKeys: highestValueLine?.lineKey ? [highestValueLine.lineKey] : [],
+        minimumOrderBase: round2(matching.reduce((sum, line) => sum + line.amount, 0)),
         eligible: discountBase > 0,
       };
     }
 
-    const eligibleServiceIds = [
-      ...new Set(
-        lineItems
-          .map((l) => l.skuSlug || l.serviceId || l.categorySlug)
-          .filter(Boolean) as string[]
-      ),
-    ];
-    const discountBase = round2(lineItems.reduce((sum, l) => sum + l.amount, 0));
+    const highestValueLine = lineItems.reduce<CouponLineItemInput | null>(
+      (highest, line) => (!highest || line.amount > highest.amount ? line : highest),
+      null,
+    );
+    const discountBase = round2(highestValueLine?.amount || 0);
     return {
       discountBase,
-      eligibleServiceIds,
+      eligibleServiceIds: highestValueLine
+        ? [highestValueLine.skuSlug || highestValueLine.serviceId || highestValueLine.categorySlug || '']
+            .filter(Boolean)
+        : [],
+      eligibleLineKeys: highestValueLine?.lineKey ? [highestValueLine.lineKey] : [],
+      minimumOrderBase: round2(lineItems.reduce((sum, line) => sum + line.amount, 0)),
       eligible: discountBase > 0,
     };
   }
@@ -174,6 +183,8 @@ function resolveDiscountBase(params: {
     return {
       discountBase: orderAmount,
       eligibleServiceIds,
+      eligibleLineKeys: [],
+      minimumOrderBase: orderAmount,
       eligible: eligibleServiceIds.length > 0,
     };
   }
@@ -183,6 +194,8 @@ function resolveDiscountBase(params: {
     eligibleServiceIds: serviceIds.length
       ? [...new Set(serviceIds.map((s) => s.trim()).filter(Boolean))]
       : [],
+    eligibleLineKeys: [],
+    minimumOrderBase: orderAmount,
     eligible: true,
   };
 }
@@ -289,6 +302,52 @@ function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: str
 }
 
 export class CouponService {
+  static async listHomeOffers() {
+    const now = new Date();
+    const coupons = await Coupon.find({
+      isActive: true,
+      showOnHomeOffers: { $ne: false },
+      applicableFlows: 'BOOK_NOW',
+      applicableLocations: 'ALL_LOCATIONS',
+      redemptionScope: { $ne: 'GLOBAL_SINGLE_USE' },
+      startDate: { $lte: now },
+      $or: [{ expiryDate: null }, { expiryDate: { $gte: now } }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    const limitedCouponIds = coupons
+      .filter((coupon) => coupon.overallUsageLimit)
+      .map((coupon) => coupon._id);
+    const redemptionCounts = limitedCouponIds.length
+      ? await CouponRedemption.aggregate([
+          { $match: { couponId: { $in: limitedCouponIds }, status: 'REDEEMED' } },
+          { $group: { _id: '$couponId', count: { $sum: 1 } } },
+        ])
+      : [];
+    const countByCouponId = new Map(
+      redemptionCounts.map((entry) => [String(entry._id), Number(entry.count)]),
+    );
+
+    return coupons
+      .filter((coupon) =>
+        !coupon.overallUsageLimit ||
+        (countByCouponId.get(String(coupon._id)) || 0) < coupon.overallUsageLimit,
+      )
+      .slice(0, 20)
+      .map((coupon) => ({
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        minOrderAmount: coupon.minOrderAmount,
+        applicableTo: coupon.applicableTo,
+        serviceIds: coupon.serviceIds,
+        firstBookingOnly: coupon.firstBookingOnly,
+        expiryDate: coupon.expiryDate,
+      }));
+  }
+
   static async createCoupon(payload: Record<string, unknown>): Promise<ICoupon> {
     const data = assertCreatePayload(payload);
     const existing = await Coupon.findOne({ code: data.code }).lean();
@@ -380,6 +439,7 @@ export class CouponService {
       'startDate',
       'expiryDate',
       'isActive',
+      'showOnHomeOffers',
     ] as const;
 
     for (const key of allowed) {
@@ -461,6 +521,7 @@ export class CouponService {
     city?: string;
     pinCode?: string;
     skipActiveRedemptionCheck?: boolean;
+    validationContext?: CouponValidationContext;
   }): Promise<ValidationResult> {
     const code = normalizeCouponCode(params.couponCode);
     const userId = String(params.userId || '').trim();
@@ -478,7 +539,7 @@ export class CouponService {
       return fail(COUPON_ERROR_CODES.INVALID_REQUEST, 'A valid order amount is required.');
     }
 
-    const coupon = await Coupon.findOne({ code });
+    const coupon = params.validationContext?.coupon || (await Coupon.findOne({ code }));
     if (!coupon) return fail(COUPON_ERROR_CODES.COUPON_NOT_FOUND);
     if (!coupon.isActive) return fail(COUPON_ERROR_CODES.COUPON_INACTIVE);
     const redemptionScope = coupon.redemptionScope || 'PER_USER';
@@ -514,7 +575,7 @@ export class CouponService {
       }
     }
 
-    const { discountBase, eligibleServiceIds, eligible } = resolveDiscountBase({
+    const { discountBase, eligibleServiceIds, eligibleLineKeys, minimumOrderBase, eligible } = resolveDiscountBase({
       coupon,
       orderAmount: amount,
       serviceIds,
@@ -525,7 +586,7 @@ export class CouponService {
       return fail(COUPON_ERROR_CODES.SERVICE_NOT_ELIGIBLE);
     }
 
-    const minOrderCheckAmount = lineItems.length > 0 ? discountBase : amount;
+    const minOrderCheckAmount = lineItems.length > 0 ? minimumOrderBase : amount;
 
     if (minOrderCheckAmount < Number(coupon.minOrderAmount || 0)) {
       const shortfall = round2(Number(coupon.minOrderAmount) - minOrderCheckAmount);
@@ -535,15 +596,19 @@ export class CouponService {
       );
     }
 
-    const redeemedCount = await CouponRedemption.countDocuments({
-      couponId: coupon._id,
-      userId,
-      status: 'REDEEMED',
-    });
-    const totalRedeemedCount = await CouponRedemption.countDocuments({
-      couponId: coupon._id,
-      status: 'REDEEMED',
-    });
+    const redeemedCount =
+      params.validationContext?.redeemedCount ??
+      (await CouponRedemption.countDocuments({
+        couponId: coupon._id,
+        userId,
+        status: 'REDEEMED',
+      }));
+    const totalRedeemedCount =
+      params.validationContext?.totalRedeemedCount ??
+      (await CouponRedemption.countDocuments({
+        couponId: coupon._id,
+        status: 'REDEEMED',
+      }));
 
     if (coupon.overallUsageLimit && totalRedeemedCount >= coupon.overallUsageLimit) {
       return fail(
@@ -590,16 +655,21 @@ export class CouponService {
     }
 
     if (coupon.firstBookingOnly) {
-      try {
-        const hasPaid = await PaymentServiceClient.hasSuccessfulPayment(userId);
-        if (hasPaid || redeemedCount > 0) {
-          return fail(COUPON_ERROR_CODES.NOT_ELIGIBLE_FOR_FIRST_BOOKING);
+      if (redeemedCount > 0) {
+        return fail(COUPON_ERROR_CODES.NOT_ELIGIBLE_FOR_FIRST_BOOKING);
+      }
+      if (!params.validationContext?.deferFirstBookingCheck) {
+        try {
+          const hasPaid = await PaymentServiceClient.hasSuccessfulPayment(userId);
+          if (hasPaid) {
+            return fail(COUPON_ERROR_CODES.NOT_ELIGIBLE_FOR_FIRST_BOOKING);
+          }
+        } catch {
+          return fail(
+            COUPON_ERROR_CODES.NOT_ELIGIBLE_FOR_FIRST_BOOKING,
+            'Unable to verify first-booking eligibility. Please try again.'
+          );
         }
-      } catch {
-        return fail(
-          COUPON_ERROR_CODES.NOT_ELIGIBLE_FOR_FIRST_BOOKING,
-          'Unable to verify first-booking eligibility. Please try again.'
-        );
       }
     }
 
@@ -614,11 +684,13 @@ export class CouponService {
       couponCode: coupon.code,
       redemptionScope,
       discountType: coupon.discountType,
+      discountValue: Number(coupon.discountValue) || 0,
       discountAmount,
       originalAmount: amount,
       amountAfterCoupon: round2(Math.max(0, amount - discountAmount)),
       eligibleAmount: discountBase,
       eligibleServiceIds,
+      eligibleLineKeys,
     };
   }
 
@@ -647,6 +719,7 @@ export class CouponService {
       amountAfterCoupon?: number;
       eligibleAmount?: number;
       eligibleServiceIds?: string[];
+      eligibleLineKeys?: string[];
       code?: CouponErrorCode;
     }>
   > {
@@ -674,8 +747,63 @@ export class CouponService {
       startDate: { $lte: now },
       $or: [{ expiryDate: null }, { expiryDate: { $gte: now } }],
     })
-      .sort({ code: 1 })
+      .sort({ code: 1 });
+
+    const couponIds = coupons.map((coupon) => coupon._id);
+    const redemptionCounts = new Map<string, { user: number; total: number }>();
+    if (couponIds.length > 0) {
+    const userRedemptions = await CouponRedemption.find({
+      couponId: { $in: couponIds },
+      userId,
+      status: 'REDEEMED',
+    })
+      .select({ couponId: 1 })
       .lean();
+    for (const redemption of userRedemptions) {
+      const couponId = String(redemption.couponId);
+      const counts = redemptionCounts.get(couponId) || { user: 0, total: 0 };
+      counts.user += 1;
+      redemptionCounts.set(couponId, counts);
+    }
+    }
+
+    const limitedCouponIds = coupons
+    .filter((coupon) => coupon.overallUsageLimit)
+    .map((coupon) => coupon._id);
+    if (limitedCouponIds.length > 0) {
+    const redemptionStats = await CouponRedemption.aggregate([
+        {
+          $match: {
+            couponId: { $in: limitedCouponIds },
+            status: 'REDEEMED',
+          },
+        },
+        {
+          $group: {
+            _id: '$couponId',
+            total: { $sum: 1 },
+          },
+        },
+      ]);
+    for (const stat of redemptionStats) {
+      const couponId = String(stat._id);
+      const counts = redemptionCounts.get(couponId) || { user: 0, total: 0 };
+      counts.total = stat.total;
+      redemptionCounts.set(couponId, counts);
+    }
+    }
+
+    let firstBookingEligible = true;
+    if (coupons.some((coupon) => coupon.firstBookingOnly)) {
+      try {
+        firstBookingEligible = !(await PaymentServiceClient.hasSuccessfulPayment(userId));
+      } catch (error) {
+        logger.warn('Unable to verify first-booking eligibility; hiding first-booking coupons', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        firstBookingEligible = false;
+      }
+    }
 
     const results: Array<{
       couponId: string;
@@ -690,10 +818,16 @@ export class CouponService {
       amountAfterCoupon?: number;
       eligibleAmount?: number;
       eligibleServiceIds?: string[];
+      eligibleLineKeys?: string[];
+      eligibilityDeferred?: boolean;
       code?: CouponErrorCode;
     }> = [];
 
     for (const coupon of coupons) {
+      if (coupon.firstBookingOnly && !firstBookingEligible) {
+        continue;
+      }
+
       const validation = await this.validateCoupon({
         couponCode: coupon.code,
         userId,
@@ -704,6 +838,12 @@ export class CouponService {
         city: params.city,
         pinCode: params.pinCode,
         skipActiveRedemptionCheck: true,
+        validationContext: {
+          coupon,
+          redeemedCount: redemptionCounts.get(String(coupon._id))?.user || 0,
+          totalRedeemedCount: redemptionCounts.get(String(coupon._id))?.total || 0,
+          deferFirstBookingCheck: coupon.firstBookingOnly,
+        },
       });
 
       if (validation.valid) {
@@ -713,9 +853,7 @@ export class CouponService {
             ? `selected services`
             : '';
         const is100Percent =
-          (validation.discountType === 'PERCENTAGE' && Number(coupon.discountValue) === 100) ||
-          validation.amountAfterCoupon === 0 ||
-          validation.discountAmount >= validation.originalAmount;
+          validation.discountType === 'PERCENTAGE' && Number(coupon.discountValue) === 100;
 
         const offLabel = is100Percent
           ? (onServices ? `100% OFF – ${onServices}` : '100% OFF')
@@ -736,7 +874,12 @@ export class CouponService {
           amountAfterCoupon: validation.amountAfterCoupon,
           eligibleAmount: validation.eligibleAmount,
           eligibleServiceIds: validation.eligibleServiceIds,
+          eligibleLineKeys: validation.eligibleLineKeys,
         });
+        continue;
+      }
+
+      if (validation.code === COUPON_ERROR_CODES.NOT_ELIGIBLE_FOR_FIRST_BOOKING) {
         continue;
       }
 
@@ -745,9 +888,12 @@ export class CouponService {
         continue;
       }
 
-      const used =
+      if (
         validation.code === COUPON_ERROR_CODES.COUPON_ALREADY_USED ||
-        validation.code === COUPON_ERROR_CODES.COUPON_USAGE_LIMIT_REACHED;
+        validation.code === COUPON_ERROR_CODES.COUPON_USAGE_LIMIT_REACHED
+      ) {
+        continue;
+      }
 
       results.push({
         couponId: String(coupon._id),
@@ -755,7 +901,7 @@ export class CouponService {
         discountType: coupon.discountType,
         discountValue: Number(coupon.discountValue) || 0,
         minOrderAmount: Number(coupon.minOrderAmount) || 0,
-        status: used ? 'ALREADY_USED' : 'NOT_AVAILABLE',
+        status: 'NOT_AVAILABLE',
         message: validation.message,
         code: validation.code,
       });

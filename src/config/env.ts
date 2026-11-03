@@ -10,13 +10,18 @@ const envSchema = z.object({
   MONGODB_DB: z.string().default('extrahand'),
   SERVICE_AUTH_TOKEN: z.string().min(1, 'SERVICE_AUTH_TOKEN is required'),
   PAYMENT_SERVICE_URL: z.string().url().default('http://localhost:4009'),
+  /** Catalog content admin routes are proxied here for coupon-portal admin sessions. */
+  TASK_SERVICE_URL: z.string().url().default('http://localhost:4002'),
+  /** Signs coupon-portal admin session tokens; derived from SERVICE_AUTH_TOKEN when unset. */
+  ADMIN_SESSION_SECRET: z.string().min(32).optional(),
   PENDING_REDEMPTION_TTL_MINUTES: z.string().transform(Number).default('30'),
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
   CORS_ORIGIN: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.string().transform(Number).default('900000'),
   RATE_LIMIT_MAX_REQUESTS: z.string().transform(Number).default('1000'),
-  LOCAL_ADMIN_USERNAME: z.string().default('admin'),
-  LOCAL_ADMIN_PASSWORD: z.string().default('admin123'),
+  // No defaults: a successful login now grants an admin session, so a fallback admin must be configured explicitly.
+  LOCAL_ADMIN_USERNAME: z.string().optional(),
+  LOCAL_ADMIN_PASSWORD: z.string().optional(),
 });
 
 export function validateEnv() {

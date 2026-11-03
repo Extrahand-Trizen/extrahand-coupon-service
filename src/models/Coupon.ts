@@ -31,6 +31,7 @@ export interface ICoupon extends Document {
   startDate: Date;
   expiryDate: Date | null;
   isActive: boolean;
+  showOnHomeOffers: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -131,6 +132,10 @@ const CouponSchema = new Schema<ICoupon>(
       type: Boolean,
       default: true,
       index: true,
+    },
+    showOnHomeOffers: {
+      type: Boolean,
+      default: true,
     },
   },
   { timestamps: true }
