@@ -5,6 +5,7 @@ import { PaymentServiceClient } from '../clients/PaymentServiceClient';
 import { BadRequestError, ConflictError, NotFoundError } from '../errors/AppError';
 import { validateEnv } from '../config/env';
 import logger from '../config/logger';
+import { buildHomeOfferQuery, type HomeOfferLocation } from '../utils/homeOfferQuery';
 import {
   APPLICABILITY_TYPES,
   ApplicabilityType,
@@ -302,17 +303,9 @@ function assertCreatePayloadWithCode(payload: Record<string, unknown>, code: str
 }
 
 export class CouponService {
-  static async listHomeOffers() {
+  static async listHomeOffers(location: HomeOfferLocation = {}) {
     const now = new Date();
-    const coupons = await Coupon.find({
-      isActive: true,
-      showOnHomeOffers: { $ne: false },
-      applicableFlows: 'BOOK_NOW',
-      applicableLocations: 'ALL_LOCATIONS',
-      redemptionScope: { $ne: 'GLOBAL_SINGLE_USE' },
-      startDate: { $lte: now },
-      $or: [{ expiryDate: null }, { expiryDate: { $gte: now } }],
-    })
+    const coupons = await Coupon.find(buildHomeOfferQuery(location, now))
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();

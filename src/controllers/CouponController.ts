@@ -11,8 +11,11 @@ function resolveUserId(req: Request): string {
 }
 
 export class CouponController {
-  static async listHomeOffers(_req: Request, res: Response): Promise<void> {
-    const offers = await CouponService.listHomeOffers();
+  static async listHomeOffers(req: Request, res: Response): Promise<void> {
+    const offers = await CouponService.listHomeOffers({
+      city: typeof req.query.city === 'string' ? req.query.city : undefined,
+      pinCode: typeof req.query.pinCode === 'string' ? req.query.pinCode : undefined,
+    });
     res.json({ success: true, data: offers });
   }
 
